@@ -98,24 +98,31 @@ const App = {
         const continentCountries = CONFIG.CONTINENTS[continentName] || [];
         if (continentCountries.length === 0) return;
         
-        // Get countries that have diocese data
-        const countriesWithData = this.getCountriesWithData();
-        const validCountries = continentCountries.filter(c => countriesWithData.includes(c));
+        console.log(`Loading ${continentName} with ${continentCountries.length} potential countries`);
         
-        if (validCountries.length === 0) {
-            alert(`No diocese data found for countries in ${continentName}`);
+        // Load all countries in the continent
+        const loaded = await ArcGISApiLoader.loadMultipleCountries(continentCountries, continentName);
+        
+        if (loaded === 0) {
+            alert(`Failed to load any countries from ${continentName}`);
             return;
         }
         
-        // Load all countries in the continent
-        await ArcGISApiLoader.loadMultipleCountries(validCountries, continentName);
+        console.log(`Successfully loaded ${loaded} countries`);
+        
         this.updateLoadedCountriesList();
+        
+        // Wait a bit for map to be ready
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        // Force render
+        console.log('Rendering heatmap...');
         await this.renderAsync();
         
         // Zoom to continent bounds
         setTimeout(() => {
             this.zoomToContinentBounds();
-        }, 500);
+        }, 800);
     },
     
     getCountriesWithData() {
