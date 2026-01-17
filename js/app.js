@@ -51,8 +51,20 @@ const App = {
         });
         
         if (continentSelect) {
-            continentSelect.addEventListener('change', (e) => {
+            continentSelect.addEventListener('change', async (e) => {
                 this.currentContinent = e.target.value;
+                
+                // If "All" is selected, clear all loaded countries
+                if (this.currentContinent === 'All') {
+                    ArcGISApiLoader.clearAllCountries();
+                    this.updateLoadedCountriesList();
+                    this.render();
+                    this.filterCountriesByContinent();
+                    return;
+                }
+                
+                // Load all countries in the selected continent
+                await this.loadContinentData(this.currentContinent);
                 this.filterCountriesByContinent();
             });
         }
@@ -80,6 +92,40 @@ const App = {
             if (CONFIG.LOADED_COUNTRIES.size === 0) return;
             this.debounceRender(1000);
         });
+    },
+    
+    async loadContinentData(continentName) {
+        const continentCountries = CONFIG.CONTINENTS[continentName] || [];
+        if (continentCountries.length === 0) return;
+        
+        // Get countries that have diocese data
+        const countriesWithData = this.getCountriesWithData();
+        const validCountries = continentCountries.filter(c => countriesWithData.includes(c));
+        
+        if (validCountries.length === 0) {
+            alert(`No diocese data found for countries in ${continentName}`);
+            return;
+        }
+        
+        // Load all countries in the continent
+        await ArcGISApiLoader.loadMultipleCountries(validCountries, continentName);
+        this.updateLoadedCountriesList();
+        await this.renderAsync();
+        
+        // Zoom to continent bounds
+        setTimeout(() => {
+            this.zoomToContinentBounds();
+        }, 500);
+    },
+    
+    getCountriesWithData() {
+        const countries = new Set();
+        this.mostRecentData.forEach(diocese => {
+            if (diocese.Country) {
+                countries.add(diocese.Country.trim());
+            }
+        });
+        return Array.from(countries);
     },
     
     getFilteredCountries() {
@@ -132,11 +178,14 @@ const App = {
             });
             item.addEventListener('click', async () => {
                 if (isLoaded) {
-                    ArcGISApiLoader.clearCountry(country);
-                    this.updateLoadedCountriesList();
-                    this.render();
+                    // If already loaded (part of continent), just zoom to it
+                    const features = ArcGISApiLoader.getCountryFeatures(country);
+                    if (features && features.length > 0) {
+                        this.zoomToCountry(features);
+                    }
                 } else {
-                    ArcGISApiLoader.clearCountry();
+                    // Load single country
+                    ArcGISApiLoader.clearAllCountries();
                     const features = await ArcGISApiLoader.loadCountryBoundaries(country);
                     this.updateLoadedCountriesList();
                     await this.renderAsync();
@@ -179,6 +228,32 @@ const App = {
         }
     },
     
+    zoomToContinentBounds() {
+        const allFeatures = ArcGISApiLoader.getAllLoadedFeatures();
+        if (allFeatures.length === 0) return;
+        
+        const coords = [];
+        allFeatures.forEach(feature => {
+            if (feature.geometry && feature.geometry.coordinates) {
+                const extractCoords = (coordArray) => {
+                    if (typeof coordArray[0] === 'number') {
+                        coords.push(coordArray);
+                    } else {
+                        coordArray.forEach(extractCoords);
+                    }
+                };
+                extractCoords(feature.geometry.coordinates);
+            }
+        });
+        
+        if (coords.length > 0) {
+            const bounds = coords.reduce((bounds, coord) => {
+                return bounds.extend(coord);
+            }, new maplibregl.LngLatBounds(coords[0], coords[0]));
+            MapManager.map.fitBounds(bounds, {padding: 50, maxZoom: 6, duration: 1500});
+        }
+    },
+    
     updateLoadedCountriesList() {
         const listDiv = document.getElementById('loaded-countries-list');
         if (!listDiv) return;
@@ -187,17 +262,39 @@ const App = {
             return;
         }
         listDiv.innerHTML = '';
-        CONFIG.LOADED_COUNTRIES.forEach(country => {
-            const tag = document.createElement('span');
-            tag.style.cssText = 'display:inline-block;background:#3498db;color:white;padding:6px 12px;margin:2px;border-radius:4px;font-size:13px;cursor:pointer;';
-            tag.innerHTML = country + ' <span style="margin-left:8px;font-weight:bold;">×</span>';
-            tag.addEventListener('click', () => {
-                ArcGISApiLoader.clearCountry(country);
+        
+        // Show continent name if multiple countries loaded
+        if (CONFIG.LOADED_COUNTRIES.size > 1 && this.currentContinent !== 'All') {
+            const continentTag = document.createElement('div');
+            continentTag.style.cssText = 'background:#9b59b6;color:white;padding:8px 14px;margin:4px 0;border-radius:6px;font-size:14px;font-weight:600;display:flex;justify-content:space-between;align-items:center;';
+            continentTag.innerHTML = `
+                <span>${this.currentContinent} (${CONFIG.LOADED_COUNTRIES.size} countries)</span>
+                <span style="cursor:pointer;font-size:18px;font-weight:bold;" id="clear-continent">×</span>
+            `;
+            listDiv.appendChild(continentTag);
+            
+            document.getElementById('clear-continent').addEventListener('click', () => {
+                ArcGISApiLoader.clearAllCountries();
+                this.currentContinent = 'All';
+                document.getElementById('continent-select').value = 'All';
                 this.updateLoadedCountriesList();
                 this.render();
+                this.filterCountriesByContinent();
             });
-            listDiv.appendChild(tag);
-        });
+        } else {
+            // Show individual country tags
+            CONFIG.LOADED_COUNTRIES.forEach(country => {
+                const tag = document.createElement('span');
+                tag.style.cssText = 'display:inline-block;background:#3498db;color:white;padding:6px 12px;margin:2px;border-radius:4px;font-size:13px;cursor:pointer;';
+                tag.innerHTML = country + ' <span style="margin-left:8px;font-weight:bold;">×</span>';
+                tag.addEventListener('click', () => {
+                    ArcGISApiLoader.clearCountry(country);
+                    this.updateLoadedCountriesList();
+                    this.render();
+                });
+                listDiv.appendChild(tag);
+            });
+        }
     },
     
     async render() {
