@@ -91,7 +91,7 @@ const ArcGISApiLoader = {
                 }
                 
                 // Update progress
-                const progress = Math.round((loaded / total) * 100);
+                const progress = Math.round(((loaded) / total) * 100);
                 this.showProgress(loaded, total, progress);
             }
             
@@ -322,26 +322,65 @@ const ArcGISApiLoader = {
         const matches = new Map();
         const allBoundaries = this.getAllBoundaries();
         
-        if (allBoundaries.length === 0) return matches;
-        
-        console.log('Matching dioceses to', allBoundaries.length, 'boundaries');
-        
-        const loadedCountries = Array.from(CONFIG.LOADED_COUNTRIES);
-        const countryDioceses = data.filter(d => {
-            const dioceseCountry = (d.Country || '').trim();
-            return loadedCountries.some(lc => dioceseCountry.toLowerCase() === lc.toLowerCase());
-        });
-        
-        console.log('Found', countryDioceses.length, 'dioceses in loaded countries');
-        
-        if (countryDioceses.length === 0) {
-            console.warn('⚠ No dioceses found for loaded countries. Check Country field in CSV.');
+        if (allBoundaries.length === 0) {
+            console.warn('matchDiocesesToBoundaries: No boundaries to match');
+            return matches;
         }
         
+        console.log('=== MATCHING DIOCESES TO BOUNDARIES ===');
+        console.log('Total boundaries:', allBoundaries.length);
+        console.log('Total dioceses in data:', data.length);
+        
+        const loadedCountries = Array.from(CONFIG.LOADED_COUNTRIES);
+        console.log('Loaded countries:', loadedCountries);
+        
+        // Get unique boundary countries for debugging
+        const boundaryCountries = new Set();
+        allBoundaries.forEach(b => {
+            const country = b.properties.COUNTRY || b.properties.country;
+            if (country) boundaryCountries.add(country);
+        });
+        console.log('Boundary countries:', Array.from(boundaryCountries));
+        
+        // Get unique diocese countries for debugging
+        const dioceseCountries = new Set();
+        data.forEach(d => {
+            if (d.Country) dioceseCountries.add(d.Country.trim());
+        });
+        console.log('Diocese countries in CSV:', Array.from(dioceseCountries));
+        
+        const countryDioceses = data.filter(d => {
+            const dioceseCountry = (d.Country || '').trim();
+            return loadedCountries.some(lc => {
+                // Case-insensitive comparison
+                return dioceseCountry.toLowerCase() === lc.toLowerCase();
+            });
+        });
+        
+        console.log('Filtered dioceses for loaded countries:', countryDioceses.length);
+        
+        if (countryDioceses.length === 0) {
+            console.error('❌ No dioceses found for loaded countries!');
+            console.log('Check if country names in CSV match ArcGIS country names');
+            return matches;
+        }
+        
+        // Log sample dioceses with coordinates
+        console.log('Sample filtered dioceses:', countryDioceses.slice(0, 3).map(d => ({
+            diocese: d.Diocese,
+            country: d.Country,
+            lat: d.Latitude,
+            lng: d.Longitude
+        })));
+        
         let matchedCount = 0;
+        let processedBoundaries = 0;
+        
         allBoundaries.forEach(boundary => {
+            processedBoundaries++;
             const boundaryId = this.getBoundaryId(boundary);
             const matchedDioceses = countryDioceses.filter(diocese => this.isDioceseInBoundary(diocese, boundary));
+            
             if (matchedDioceses.length > 0) {
                 matchedDioceses.forEach(d => {
                     d._boundaryName = this.getBoundaryName(boundary);
@@ -349,9 +388,16 @@ const ArcGISApiLoader = {
                 matches.set(boundaryId, {boundary: boundary, dioceses: matchedDioceses});
                 matchedCount += matchedDioceses.length;
             }
+            
+            // Log progress every 100 boundaries
+            if (processedBoundaries % 100 === 0) {
+                console.log(`Processed ${processedBoundaries}/${allBoundaries.length} boundaries, ${matchedCount} dioceses matched`);
+            }
         });
         
-        console.log('Matched', matchedCount, 'dioceses to', matches.size, 'boundaries');
+        console.log('✓ Matched', matchedCount, 'dioceses to', matches.size, 'boundaries');
+        console.log('=== MATCHING COMPLETE ===');
+        
         return matches;
     },
     
