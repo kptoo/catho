@@ -63,7 +63,7 @@ const HeatmapRenderer = {
         if (!MapManager.map.loaded()) {
             await new Promise(resolve => MapManager.map.once('load', resolve));
         }
-        if (CONFIG.LOADED_COUNTRIES.size > 0 && ArcGISApiLoader.currentCountryBoundaries) {
+        if (CONFIG.LOADED_COUNTRIES.size > 0 && ArcGISApiLoader.countryBoundariesMap.size > 0) {
             await this.renderMixedMap(data, dioceseMap, statistic);
         } else {
             MapManager.clearMarkers();
@@ -92,13 +92,24 @@ const HeatmapRenderer = {
         if (this.isRendering) return;
         this.isRendering = true;
         
+        console.log('=== RENDER MIXED MAP START ===');
+        console.log('Data points:', data.length);
+        console.log('Loaded countries:', Array.from(CONFIG.LOADED_COUNTRIES));
+        
         MapManager.clearMarkers();
         MapManager.clearPolygons();
         
         const matches = ArcGISApiLoader.matchDiocesesToBoundaries(data);
         const loadedBoundaries = ArcGISApiLoader.getAllBoundaries();
         
-        console.log('Boundaries:', loadedBoundaries.length, 'Matches:', matches.size);
+        console.log('Total boundaries:', loadedBoundaries.length);
+        console.log('Matched boundaries:', matches.size);
+        
+        if (loadedBoundaries.length === 0) {
+            console.error('❌ No boundaries loaded!');
+            this.isRendering = false;
+            return;
+        }
         
         const boundaryValues = [];
         matches.forEach((match) => {
@@ -109,18 +120,23 @@ const HeatmapRenderer = {
             }
         });
         
+        console.log('Boundary values for color scale:', boundaryValues.length);
+        
         if (boundaryValues.length === 0) {
-            console.warn('⚠ No valid boundary values for color scale');
-            this.isRendering = false;
-            return;
+            console.warn('⚠ No valid boundary values - rendering gray boundaries only');
+            // Still render boundaries but in gray
+            const min = 0;
+            const max = 1;
+            this.createColorScale(min, max);
+            this.renderLegend(min, max, statistic);
+        } else {
+            const min = Math.min(...boundaryValues);
+            const max = Math.max(...boundaryValues);
+            console.log('Dynamic range for', statistic, ':', min, 'to', max);
+            
+            this.createColorScale(min, max);
+            this.renderLegend(min, max, statistic);
         }
-        
-        const min = Math.min(...boundaryValues);
-        const max = Math.max(...boundaryValues);
-        console.log('Dynamic range for', statistic, ':', min, 'to', max);
-        
-        this.createColorScale(min, max);
-        this.renderLegend(min, max, statistic);
         
         const matchedBoundaryIds = new Set();
         matches.forEach((match, boundaryId) => matchedBoundaryIds.add(boundaryId));
@@ -140,6 +156,7 @@ const HeatmapRenderer = {
                 try {
                     const boundaryId = ArcGISApiLoader.getBoundaryId(boundary);
                     const boundaryName = ArcGISApiLoader.getBoundaryName(boundary);
+                    const boundaryCountry = boundary.properties.COUNTRY || boundary.properties.country || 'Unknown';
                     
                     if (matchedBoundaryIds.has(boundaryId)) {
                         const match = matches.get(boundaryId);
@@ -170,6 +187,7 @@ const HeatmapRenderer = {
                         coloredCount++;
                         boundaryCount++;
                     } else {
+                        // Render boundary in gray
                         const popupContent = this.createEmptyBoundaryPopup(boundaryName, boundary.properties);
                         MapManager.addPolygon(boundary, '#2c2c2c', popupContent);
                         boundaryCount++;
@@ -184,9 +202,14 @@ const HeatmapRenderer = {
         this.hideProgress();
         this.isRendering = false;
         console.log('✓ Rendered', boundaryCount, 'boundaries,', coloredCount, 'with data');
+        console.log('=== RENDER MIXED MAP END ===');
         
-        if (coloredCount === 0) {
-            console.warn('⚠ No dioceses matched to boundaries. Check diocese coordinates.');
+        if (coloredCount === 0 && matches.size > 0) {
+            console.warn('⚠ Boundaries matched but none colored - possible aggregation issue');
+        } else if (matches.size === 0) {
+            console.warn('⚠ No dioceses matched to boundaries. Checking data...');
+            console.log('Sample diocese countries:', data.slice(0, 5).map(d => d.Country));
+            console.log('Sample boundary countries:', loadedBoundaries.slice(0, 5).map(b => b.properties.COUNTRY || b.properties.country));
         }
     },
     
